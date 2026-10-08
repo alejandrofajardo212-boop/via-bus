@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const tripSchema = new mongoose.Schema({
+  codigo: {
+    type: String,
+    unique: true,
+    trim: true
+  },
   bus: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Bus',
@@ -26,7 +31,8 @@ const tripSchema = new mongoose.Schema({
   },
   price: {
     type: Number,
-    required: [true, 'El valor del tiquete es obligatorio']
+    required: [true, 'El valor del tiquete es obligatorio'],
+    min: [0, 'El precio no puede ser negativo']
   },
   imageUrl: {
     type: String,
@@ -34,9 +40,28 @@ const tripSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['SCHEDULED', 'IN_TRANSIT', 'COMPLETED', 'CANCELLED'],
-    default: 'SCHEDULED'
+    default: 'Programado'
   }
-}, { timestamps: true });
+}, {
+  timestamps: true,
+  toJSON: {
+    virtuals: true,
+    transform: (doc, ret) => {
+      ret.id = ret._id ? ret._id.toString() : ret.id;
+      ret.origen = ret.origin;
+      ret.destino = ret.destination;
+      ret.fecha = ret.departureDate;
+      ret.hora = ret.departureTime;
+      ret.precio = ret.price;
+      ret.estado = ret.status;
+      if (ret.bus && ret.bus._id) {
+        ret.vehiculoId = ret.bus._id.toString();
+      } else if (ret.bus) {
+        ret.vehiculoId = ret.bus.toString();
+      }
+      return ret;
+    }
+  }
+});
 
 module.exports = mongoose.model('Trip', tripSchema);

@@ -15,14 +15,30 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Rutas de la API
+// Rutas de Clientes / Customers
+app.use('/api/clientes', require('./src/routes/customerRoutes'));
+app.use('/api/customers', require('./src/routes/customerRoutes'));
+
+// Rutas de Vehículos / Buses
+app.use('/api/vehiculos', require('./src/routes/busRoutes'));
 app.use('/api/buses', require('./src/routes/busRoutes'));
+
+// Rutas de Viajes / Trips
+app.use('/api/viajes', require('./src/routes/tripRoutes'));
 app.use('/api/trips', require('./src/routes/tripRoutes'));
+
+// Rutas de Ventas / Reservas / Bookings
+app.use('/api/ventas', require('./src/routes/bookingRoutes'));
+app.use('/api/reservas', require('./src/routes/bookingRoutes'));
 app.use('/api/bookings', require('./src/routes/bookingRoutes'));
 
 // Ruta base de prueba
 app.get('/', (req, res) => {
-  res.send('API de Via Bus Express Funcionando Correctamente');
+  res.json({
+    success: true,
+    message: 'API de Via Bus Express Funcionando Correctamente',
+    modules: ['clientes', 'vehiculos', 'viajes', 'ventas']
+  });
 });
 
 // Puerto del servidor

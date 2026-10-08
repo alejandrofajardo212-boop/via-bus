@@ -1,8 +1,23 @@
 const express = require('express');
 const router = express.Router();
-const { createBus, getBuses } = require('../controllers/busController');
+const {
+  createBus,
+  getBuses,
+  getBusById,
+  updateBus,
+  updateDriverSeat,
+  deleteBus
+} = require('../controllers/busController');
 
-router.post('/', createBus);
-router.get('/', getBuses);
+router.route('/')
+  .get(getBuses)
+  .post(createBus);
+
+router.route('/:id')
+  .get(getBusById)
+  .put(updateBus)
+  .delete(deleteBus);
+
+router.put('/:id/conductor-puesto', updateDriverSeat);
 
 module.exports = router;
