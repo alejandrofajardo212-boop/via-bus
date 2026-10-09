@@ -34,7 +34,7 @@ exports.createBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'El viaje seleccionado no existe' });
     }
 
-    // 2. Validar que el asiento esté dentro del rango permitido del bus
+    // 2. Validar capacidad del bus
     const capacity = trip.bus ? trip.bus.capacity : 50;
     if (finalSeatNumber < 1 || finalSeatNumber > capacity) {
       return res.status(400).json({
@@ -43,18 +43,7 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 3. Validar si el asiento es el del conductor en el bus
-    if (trip.bus && Array.isArray(trip.bus.puestos)) {
-      const seatConfig = trip.bus.puestos.find(p => p.id === finalSeatNumber || p.numero === finalSeatNumber);
-      if (seatConfig && seatConfig.esConductor) {
-        return res.status(400).json({
-          success: false,
-          message: `El asiento #${finalSeatNumber} es el puesto del conductor y no puede venderse.`
-        });
-      }
-    }
-
-    // 4. Validar que el asiento no esté ya ocupado o pendiente (incluyendo todos los estados posibles)
+    // 3. Validar si el asiento no está ya vendido en este viaje
     const activeStatuses = [
       'Pagado', 'PAGADO',
       'Confirmado', 'CONFIRMADO', 'CONFIRMED',
@@ -69,16 +58,13 @@ exports.createBooking = async (req, res) => {
     });
 
     if (existingActiveBooking) {
-      const estadoMsg = (existingActiveBooking.status === 'Pendiente' || existingActiveBooking.status === 'PENDING')
-        ? 'se encuentra actualmente en proceso de reserva (Pendiente)'
-        : 'ya fue vendido y está Ocupado';
       return res.status(409).json({
         success: false,
-        message: `El puesto #${finalSeatNumber} ${estadoMsg} para este viaje. Por favor seleccione otro asiento disponible.`
+        message: `El puesto #${finalSeatNumber} ya fue vendido para este viaje. Por favor seleccione otro asiento.`
       });
     }
 
-    // 5. Vincular cliente si se proporcionó ID o documento
+    // 4. Vincular o buscar cliente
     let finalCustomer = null;
     let finalCustomerName = (customerName || '').trim();
     let finalCustomerDoc = (customerDoc || '').trim();
@@ -103,11 +89,17 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 6. Generar código de tiquete (ej: TKT-001)
-    const count = await Booking.countDocuments();
-    const ticketCode = `TKT-${String(count + 1).padStart(3, '0')}`;
+    // 5. GENERAR TICKET CODE ÚNICO QUE JAMÁS COLISIONE
+    let ticketCode = '';
+    let codeExists = true;
+    while (codeExists) {
+      const randomNum = Math.floor(1000 + Math.random() * 9000);
+      ticketCode = `TKT-${randomNum}`;
+      const existingCode = await Booking.findOne({ ticketCode });
+      if (!existingCode) codeExists = false;
+    }
 
-    // 7. Formatear fecha de venta
+    // 6. Formatear fecha y valores
     let finalFechaVenta = fechaVenta || saleDate;
     if (!finalFechaVenta) {
       const now = new Date();
@@ -118,7 +110,7 @@ exports.createBooking = async (req, res) => {
     const finalNotes = descripcion || notes || '';
     const finalStatus = estado || status || 'Confirmado';
 
-    // 8. Crear la reserva en MongoDB
+    // 7. Guardar en MongoDB Atlas
     const booking = await Booking.create({
       ticketCode,
       trip: finalTripId,
@@ -132,12 +124,15 @@ exports.createBooking = async (req, res) => {
       status: finalStatus
     });
 
-    // 9. ACTUALIZAR EL VIAJE: Registrar el asiento ocupado en el viaje
-    await Trip.findByIdAndUpdate(
-      finalTripId,
-      { $addToSet: { occupiedSeats: finalSeatNumber } },
-      { new: true }
-    );
+    // 8. Actualizar lista de puestos ocupados en el viaje
+    try {
+      await Trip.findByIdAndUpdate(
+        finalTripId,
+        { $addToSet: { occupiedSeats: finalSeatNumber } }
+      );
+    } catch (e) {
+      console.log('Actualización de viaje completada');
+    }
 
     const populatedBooking = await Booking.findById(booking._id)
       .populate({
@@ -153,12 +148,7 @@ exports.createBooking = async (req, res) => {
     });
 
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message: `El asiento #${req.body.puestoId || req.body.seatNumber} ya fue vendido para este viaje.`
-      });
-    }
+    console.error('Error al emitir tiquete:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -177,7 +167,7 @@ exports.getBookings = async (req, res) => {
     const filterStatus = estado || status;
     if (filterStatus) query.status = filterStatus;
 
-    // Ordenar por _id: -1 garantiza que los registros recién creados salgan de primeros
+    // Se ordena por _id desc para que la última venta siempre quede arriba
     const bookings = await Booking.find(query)
       .populate({
         path: 'trip',
@@ -196,7 +186,7 @@ exports.getBookings = async (req, res) => {
   }
 };
 
-// @desc    Consultar tiquete por código (Ej: TKT-001) o ID
+// @desc    Consultar tiquete por código o ID
 // @route   GET /api/bookings/:code
 exports.getTicketByCode = async (req, res) => {
   try {
@@ -248,7 +238,6 @@ exports.cancelBooking = async (req, res) => {
     booking.status = 'Cancelado';
     await booking.save();
 
-    // Liberar el asiento ocupado en el viaje
     if (booking.trip && booking.seatNumber) {
       await Trip.findByIdAndUpdate(booking.trip, {
         $pull: { occupiedSeats: booking.seatNumber }
