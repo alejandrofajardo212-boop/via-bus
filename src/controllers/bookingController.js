@@ -54,11 +54,18 @@ exports.createBooking = async (req, res) => {
       }
     }
 
-    // 4. Validar que el asiento no esté ya ocupado o pendiente para este viaje/tramo
+    // 4. Validar que el asiento no esté ya ocupado o pendiente (incluyendo todos los estados posibles)
+    const activeStatuses = [
+      'Pagado', 'PAGADO',
+      'Confirmado', 'CONFIRMADO', 'CONFIRMED',
+      'Pendiente', 'PENDIENTE', 'PENDING',
+      'Activo', 'ACTIVO'
+    ];
+
     const existingActiveBooking = await Booking.findOne({
       trip: finalTripId,
       seatNumber: finalSeatNumber,
-      status: { $in: ['Pagado', 'CONFIRMED', 'Pendiente', 'PENDING'] }
+      status: { $in: activeStatuses }
     });
 
     if (existingActiveBooking) {
@@ -96,7 +103,7 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 6. Generar código de tiquete (ej: TKT-001 o VBE-123456)
+    // 6. Generar código de tiquete (ej: TKT-001)
     const count = await Booking.countDocuments();
     const ticketCode = `TKT-${String(count + 1).padStart(3, '0')}`;
 
@@ -109,8 +116,9 @@ exports.createBooking = async (req, res) => {
 
     const finalAmount = Number(precio !== undefined ? precio : (totalAmount !== undefined ? totalAmount : trip.price));
     const finalNotes = descripcion || notes || '';
-    const finalStatus = estado || status || 'Pagado';
+    const finalStatus = estado || status || 'Confirmado';
 
+    // 8. Crear la reserva en MongoDB
     const booking = await Booking.create({
       ticketCode,
       trip: finalTripId,
@@ -123,6 +131,13 @@ exports.createBooking = async (req, res) => {
       saleDate: finalFechaVenta,
       status: finalStatus
     });
+
+    // 9. ACTUALIZAR EL VIAJE: Registrar el asiento ocupado en el viaje
+    await Trip.findByIdAndUpdate(
+      finalTripId,
+      { $addToSet: { occupiedSeats: finalSeatNumber } },
+      { new: true }
+    );
 
     const populatedBooking = await Booking.findById(booking._id)
       .populate({
@@ -152,20 +167,24 @@ exports.createBooking = async (req, res) => {
 // @route   GET /api/bookings o /api/ventas o /api/reservas
 exports.getBookings = async (req, res) => {
   try {
-    const { doc, tripId, viajeId } = req.query;
+    const { doc, tripId, viajeId, status, estado } = req.query;
     let query = {};
 
     if (doc) query.customerDoc = doc.trim();
     const filterTrip = viajeId || tripId;
     if (filterTrip) query.trip = filterTrip;
 
+    const filterStatus = estado || status;
+    if (filterStatus) query.status = filterStatus;
+
+    // Ordenar por _id: -1 garantiza que los registros recién creados salgan de primeros
     const bookings = await Booking.find(query)
       .populate({
         path: 'trip',
         populate: { path: 'bus' }
       })
       .populate('customer')
-      .sort({ createdAt: -1 });
+      .sort({ _id: -1 });
 
     res.status(200).json({
       success: true,
@@ -177,7 +196,7 @@ exports.getBookings = async (req, res) => {
   }
 };
 
-// @desc    Consultar tiquete por código (Ej: TKT-001 o VBE-123456) o ID
+// @desc    Consultar tiquete por código (Ej: TKT-001) o ID
 // @route   GET /api/bookings/:code
 exports.getTicketByCode = async (req, res) => {
   try {
@@ -228,6 +247,13 @@ exports.cancelBooking = async (req, res) => {
 
     booking.status = 'Cancelado';
     await booking.save();
+
+    // Liberar el asiento ocupado en el viaje
+    if (booking.trip && booking.seatNumber) {
+      await Trip.findByIdAndUpdate(booking.trip, {
+        $pull: { occupiedSeats: booking.seatNumber }
+      });
+    }
 
     res.status(200).json({
       success: true,
