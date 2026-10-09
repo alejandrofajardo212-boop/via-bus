@@ -22,7 +22,8 @@ exports.createBooking = async (req, res) => {
       notes,
       descripcion,
       saleDate,
-      fechaVenta
+      fechaVenta,
+      ticketCode: inputTicketCode
     } = req.body;
 
     const finalTripId = viajeId || tripId;
@@ -43,7 +44,7 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 3. Obtener nombre y documento reales del cliente (Soporta cliente seleccionado o digitado)
+    // 3. Obtener o crear cliente en MongoDB
     let inputName = (customerName || nombre || '').trim();
     let inputDoc = (customerDoc || documento || '').trim();
 
@@ -57,12 +58,7 @@ exports.createBooking = async (req, res) => {
       finalCustomer = await Customer.findOne({ documento: inputDoc });
     }
 
-    // Si se encontró el cliente en la base de datos, usar sus datos reales
-    if (finalCustomer) {
-      inputName = finalCustomer.nombre || finalCustomer.name || inputName;
-      inputDoc = finalCustomer.documento || finalCustomer.document || inputDoc;
-    } else if (inputDoc && inputName) {
-      // Si es un cliente nuevo digitado en el formulario, registrarlo
+    if (!finalCustomer && inputDoc && inputName) {
       try {
         finalCustomer = await Customer.create({
           tipoDoc: 'CC',
@@ -72,8 +68,13 @@ exports.createBooking = async (req, res) => {
           correo: `cliente.${inputDoc.slice(-4)}@email.com`
         });
       } catch (e) {
-        console.log('Cliente ya existente o registrado.');
+        finalCustomer = await Customer.findOne({ documento: inputDoc });
       }
+    }
+
+    if (finalCustomer) {
+      inputName = finalCustomer.nombre || inputName;
+      inputDoc = finalCustomer.documento || inputDoc;
     }
 
     if (!inputName || !inputDoc) {
@@ -98,9 +99,26 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 5. Generar código de tiquete único (Imposible de colisionar)
-    const randomCode = Math.floor(100000 + Math.random() * 900000);
-    const ticketCode = `TKT-${randomCode}`;
+    // 5. GARANTIZAR CÓDIGO DE TIQUETE ÚNICO (Evita rechazo por duplicado en MongoDB)
+    let ticketCode = inputTicketCode || '';
+    let isCodeTaken = true;
+
+    if (ticketCode) {
+      const checkCode = await Booking.findOne({ ticketCode });
+      if (!checkCode) isCodeTaken = false;
+    }
+
+    if (isCodeTaken) {
+      let uniqueFound = false;
+      let counter = 0;
+      while (!uniqueFound && counter < 50) {
+        counter++;
+        const randomNum = Math.floor(10000 + Math.random() * 90000);
+        ticketCode = `TKT-${randomNum}`;
+        const check = await Booking.findOne({ ticketCode });
+        if (!check) uniqueFound = true;
+      }
+    }
 
     // 6. Formatear fecha y monto
     let finalFechaVenta = fechaVenta || saleDate;
@@ -112,7 +130,7 @@ exports.createBooking = async (req, res) => {
     const finalAmount = Number(precio !== undefined ? precio : (totalAmount !== undefined ? totalAmount : trip.price));
     const finalNotes = descripcion || notes || '';
 
-    // 7. Guardar venta como 'Confirmado'
+    // 7. Guardar en MongoDB Atlas
     const booking = await Booking.create({
       ticketCode,
       trip: finalTripId,
@@ -126,7 +144,7 @@ exports.createBooking = async (req, res) => {
       status: 'Confirmado'
     });
 
-    // 8. BLOQUEAR EL ASIENTO EN EL MAPA DEL VIAJE
+    // 8. BLOQUEAR EL PUESTO EN EL MAPA DEL VIAJE
     await Trip.findByIdAndUpdate(finalTripId, {
       $addToSet: {
         occupiedSeats: finalSeatNumber,
@@ -256,4 +274,4 @@ exports.cancelBooking = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
-}; 
+};
