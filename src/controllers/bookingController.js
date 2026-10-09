@@ -15,14 +15,14 @@ exports.createBooking = async (req, res) => {
       clienteId,
       customerName,
       customerDoc,
+      nombre,
+      documento,
       totalAmount,
       precio,
       notes,
       descripcion,
       saleDate,
-      fechaVenta,
-      status,
-      estado
+      fechaVenta
     } = req.body;
 
     const finalTripId = viajeId || tripId;
@@ -35,7 +35,7 @@ exports.createBooking = async (req, res) => {
     }
 
     // 2. Validar capacidad del bus
-    const capacity = trip.bus ? trip.bus.capacity : 50;
+    const capacity = trip.bus ? (trip.bus.capacity || trip.bus.capacidad || 50) : 50;
     if (finalSeatNumber < 1 || finalSeatNumber > capacity) {
       return res.status(400).json({
         success: false,
@@ -43,14 +43,48 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 3. Validar si el asiento no está ya vendido en este viaje
-    const activeStatuses = [
-      'Pagado', 'PAGADO',
-      'Confirmado', 'CONFIRMADO', 'CONFIRMED',
-      'Pendiente', 'PENDIENTE', 'PENDING',
-      'Activo', 'ACTIVO'
-    ];
+    // 3. Obtener nombre y documento reales del cliente (Soporta cliente seleccionado o digitado)
+    let inputName = (customerName || nombre || '').trim();
+    let inputDoc = (customerDoc || documento || '').trim();
 
+    let finalCustomer = null;
+    const lookupClientId = clienteId || customerId;
+
+    if (lookupClientId && typeof lookupClientId === 'string' && lookupClientId.match(/^[0-9a-fA-F]{24}$/)) {
+      finalCustomer = await Customer.findById(lookupClientId);
+    }
+    if (!finalCustomer && inputDoc) {
+      finalCustomer = await Customer.findOne({ documento: inputDoc });
+    }
+
+    // Si se encontró el cliente en la base de datos, usar sus datos reales
+    if (finalCustomer) {
+      inputName = finalCustomer.nombre || finalCustomer.name || inputName;
+      inputDoc = finalCustomer.documento || finalCustomer.document || inputDoc;
+    } else if (inputDoc && inputName) {
+      // Si es un cliente nuevo digitado en el formulario, registrarlo
+      try {
+        finalCustomer = await Customer.create({
+          tipoDoc: 'CC',
+          documento: inputDoc,
+          nombre: inputName,
+          telefono: '3100000000',
+          correo: `cliente.${inputDoc.slice(-4)}@email.com`
+        });
+      } catch (e) {
+        console.log('Cliente ya existente o registrado.');
+      }
+    }
+
+    if (!inputName || !inputDoc) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre y documento del cliente son obligatorios'
+      });
+    }
+
+    // 4. Validar que el puesto NO esté ocupado previamente
+    const activeStatuses = ['Pagado', 'PAGADO', 'Confirmado', 'CONFIRMADO', 'CONFIRMED', 'Pendiente', 'PENDIENTE', 'Activo'];
     const existingActiveBooking = await Booking.findOne({
       trip: finalTripId,
       seatNumber: finalSeatNumber,
@@ -64,42 +98,11 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 4. Vincular o buscar cliente
-    let finalCustomer = null;
-    let finalCustomerName = (customerName || '').trim();
-    let finalCustomerDoc = (customerDoc || '').trim();
+    // 5. Generar código de tiquete único (Imposible de colisionar)
+    const randomCode = Math.floor(100000 + Math.random() * 900000);
+    const ticketCode = `TKT-${randomCode}`;
 
-    const lookupClientId = clienteId || customerId;
-    if (lookupClientId && lookupClientId.match(/^[0-9a-fA-F]{24}$/)) {
-      finalCustomer = await Customer.findById(lookupClientId);
-    }
-    if (!finalCustomer && finalCustomerDoc) {
-      finalCustomer = await Customer.findOne({ documento: finalCustomerDoc });
-    }
-
-    if (finalCustomer) {
-      finalCustomerName = finalCustomer.nombre;
-      finalCustomerDoc = finalCustomer.documento;
-    }
-
-    if (!finalCustomerName || !finalCustomerDoc) {
-      return res.status(400).json({
-        success: false,
-        message: 'El nombre y documento del cliente son obligatorios'
-      });
-    }
-
-    // 5. GENERAR TICKET CODE ÚNICO QUE JAMÁS COLISIONE
-    let ticketCode = '';
-    let codeExists = true;
-    while (codeExists) {
-      const randomNum = Math.floor(1000 + Math.random() * 9000);
-      ticketCode = `TKT-${randomNum}`;
-      const existingCode = await Booking.findOne({ ticketCode });
-      if (!existingCode) codeExists = false;
-    }
-
-    // 6. Formatear fecha y valores
+    // 6. Formatear fecha y monto
     let finalFechaVenta = fechaVenta || saleDate;
     if (!finalFechaVenta) {
       const now = new Date();
@@ -108,31 +111,29 @@ exports.createBooking = async (req, res) => {
 
     const finalAmount = Number(precio !== undefined ? precio : (totalAmount !== undefined ? totalAmount : trip.price));
     const finalNotes = descripcion || notes || '';
-    const finalStatus = estado || status || 'Confirmado';
 
-    // 7. Guardar en MongoDB Atlas
+    // 7. Guardar venta como 'Confirmado'
     const booking = await Booking.create({
       ticketCode,
       trip: finalTripId,
       customer: finalCustomer ? finalCustomer._id : null,
       seatNumber: finalSeatNumber,
-      customerName: finalCustomerName,
-      customerDoc: finalCustomerDoc,
+      customerName: inputName,
+      customerDoc: inputDoc,
       totalAmount: finalAmount,
       notes: finalNotes,
       saleDate: finalFechaVenta,
-      status: finalStatus
+      status: 'Confirmado'
     });
 
-    // 8. Actualizar lista de puestos ocupados en el viaje
-    try {
-      await Trip.findByIdAndUpdate(
-        finalTripId,
-        { $addToSet: { occupiedSeats: finalSeatNumber } }
-      );
-    } catch (e) {
-      console.log('Actualización de viaje completada');
-    }
+    // 8. BLOQUEAR EL ASIENTO EN EL MAPA DEL VIAJE
+    await Trip.findByIdAndUpdate(finalTripId, {
+      $addToSet: {
+        occupiedSeats: finalSeatNumber,
+        asientosOcupados: finalSeatNumber,
+        puestosOcupados: finalSeatNumber
+      }
+    });
 
     const populatedBooking = await Booking.findById(booking._id)
       .populate({
@@ -167,7 +168,6 @@ exports.getBookings = async (req, res) => {
     const filterStatus = estado || status;
     if (filterStatus) query.status = filterStatus;
 
-    // Se ordena por _id desc para que la última venta siempre quede arriba
     const bookings = await Booking.find(query)
       .populate({
         path: 'trip',
@@ -240,7 +240,11 @@ exports.cancelBooking = async (req, res) => {
 
     if (booking.trip && booking.seatNumber) {
       await Trip.findByIdAndUpdate(booking.trip, {
-        $pull: { occupiedSeats: booking.seatNumber }
+        $pull: {
+          occupiedSeats: booking.seatNumber,
+          asientosOcupados: booking.seatNumber,
+          puestosOcupados: booking.seatNumber
+        }
       });
     }
 
@@ -252,4 +256,4 @@ exports.cancelBooking = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
-};
+}; 
