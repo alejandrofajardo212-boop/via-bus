@@ -22,8 +22,7 @@ exports.createBooking = async (req, res) => {
       notes,
       descripcion,
       saleDate,
-      fechaVenta,
-      ticketCode: inputTicketCode
+      fechaVenta
     } = req.body;
 
     const finalTripId = viajeId || tripId;
@@ -35,16 +34,7 @@ exports.createBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'El viaje seleccionado no existe' });
     }
 
-    // 2. Validar capacidad del bus
-    const capacity = trip.bus ? (trip.bus.capacity || trip.bus.capacidad || 50) : 50;
-    if (finalSeatNumber < 1 || finalSeatNumber > capacity) {
-      return res.status(400).json({
-        success: false,
-        message: `El número de asiento ${finalSeatNumber} no es válido. Capacidad máxima: ${capacity}`
-      });
-    }
-
-    // 3. Obtener o crear cliente en MongoDB
+    // 2. Obtener cliente seleccionado o datos digitados
     let inputName = (customerName || nombre || '').trim();
     let inputDoc = (customerDoc || documento || '').trim();
 
@@ -58,7 +48,10 @@ exports.createBooking = async (req, res) => {
       finalCustomer = await Customer.findOne({ documento: inputDoc });
     }
 
-    if (!finalCustomer && inputDoc && inputName) {
+    if (finalCustomer) {
+      inputName = finalCustomer.nombre || finalCustomer.name || inputName;
+      inputDoc = finalCustomer.documento || finalCustomer.document || inputDoc;
+    } else if (inputDoc && inputName) {
       try {
         finalCustomer = await Customer.create({
           tipoDoc: 'CC',
@@ -72,11 +65,6 @@ exports.createBooking = async (req, res) => {
       }
     }
 
-    if (finalCustomer) {
-      inputName = finalCustomer.nombre || inputName;
-      inputDoc = finalCustomer.documento || inputDoc;
-    }
-
     if (!inputName || !inputDoc) {
       return res.status(400).json({
         success: false,
@@ -84,43 +72,20 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // 4. Validar que el puesto NO esté ocupado previamente
-    const activeStatuses = ['Pagado', 'PAGADO', 'Confirmado', 'CONFIRMADO', 'CONFIRMED', 'Pendiente', 'PENDIENTE', 'Activo'];
-    const existingActiveBooking = await Booking.findOne({
-      trip: finalTripId,
-      seatNumber: finalSeatNumber,
-      status: { $in: activeStatuses }
-    });
+    // 3. Generar CÓDIGO ÚNICO GARANTIZADO
+    let ticketCode = '';
+    let isUnique = false;
+    let attempts = 0;
 
-    if (existingActiveBooking) {
-      return res.status(409).json({
-        success: false,
-        message: `El puesto #${finalSeatNumber} ya fue vendido para este viaje. Por favor seleccione otro asiento.`
-      });
+    while (!isUnique && attempts < 20) {
+      attempts++;
+      const randomNum = Math.floor(100000 + Math.random() * 900000);
+      ticketCode = `TKT-${randomNum}`;
+      const existing = await Booking.findOne({ ticketCode });
+      if (!existing) isUnique = true;
     }
 
-    // 5. GARANTIZAR CÓDIGO DE TIQUETE ÚNICO (Evita rechazo por duplicado en MongoDB)
-    let ticketCode = inputTicketCode || '';
-    let isCodeTaken = true;
-
-    if (ticketCode) {
-      const checkCode = await Booking.findOne({ ticketCode });
-      if (!checkCode) isCodeTaken = false;
-    }
-
-    if (isCodeTaken) {
-      let uniqueFound = false;
-      let counter = 0;
-      while (!uniqueFound && counter < 50) {
-        counter++;
-        const randomNum = Math.floor(10000 + Math.random() * 90000);
-        ticketCode = `TKT-${randomNum}`;
-        const check = await Booking.findOne({ ticketCode });
-        if (!check) uniqueFound = true;
-      }
-    }
-
-    // 6. Formatear fecha y monto
+    // 4. Formatear fecha y monto
     let finalFechaVenta = fechaVenta || saleDate;
     if (!finalFechaVenta) {
       const now = new Date();
@@ -130,7 +95,7 @@ exports.createBooking = async (req, res) => {
     const finalAmount = Number(precio !== undefined ? precio : (totalAmount !== undefined ? totalAmount : trip.price));
     const finalNotes = descripcion || notes || '';
 
-    // 7. Guardar en MongoDB Atlas
+    // 5. Guardar la venta en MongoDB Atlas como 'Pagado' (valor enum válido)
     const booking = await Booking.create({
       ticketCode,
       trip: finalTripId,
@@ -141,10 +106,10 @@ exports.createBooking = async (req, res) => {
       totalAmount: finalAmount,
       notes: finalNotes,
       saleDate: finalFechaVenta,
-      status: 'Confirmado'
+      status: 'Pagado'
     });
 
-    // 8. BLOQUEAR EL PUESTO EN EL MAPA DEL VIAJE
+    // 6. REGISTRAR PUESTO OCUPADO EN EL VIAJE
     await Trip.findByIdAndUpdate(finalTripId, {
       $addToSet: {
         occupiedSeats: finalSeatNumber,
@@ -160,7 +125,7 @@ exports.createBooking = async (req, res) => {
       })
       .populate('customer');
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: '¡Tiquete emitido con éxito!',
       data: populatedBooking
@@ -168,7 +133,7 @@ exports.createBooking = async (req, res) => {
 
   } catch (error) {
     console.error('Error al emitir tiquete:', error);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
 

@@ -1,14 +1,15 @@
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
+
+dotenv.config();
+
+const connectDB = require('./db');
+
 const Bus = require('../models/bus');
 const Customer = require('../models/customer');
 const Trip = require('../models/trip');
 const Booking = require('../models/booking');
-const connectDB = require('./db');
 
-dotenv.config();
-
-// Funciones auxiliares para aleatoriedad
 function elementoAleatorio(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -17,7 +18,6 @@ function enteroAleatorio(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// Bancos de datos ampliados para alta variabilidad
 const ciudades = [
   'Bogotá', 'Medellín', 'Cali', 'Bucaramanga', 'San Gil', 'Charalá', 
   'Socorro', 'Cartagena', 'Tunja', 'Pereira', 'Manizales', 'Armenia', 
@@ -48,10 +48,10 @@ const estadosViaje = ['Disponible', 'Programado', 'Vendido'];
 
 async function seedData() {
   try {
+    console.log('🔄 Conectando a la base de datos...');
     await connectDB();
-    console.log('--- Iniciando Semilla de Datos Aleatorios ViaBus ---');
+    console.log('--- Iniciando Carga Masiva Completa ViaBus ---');
 
-    // 0. Limpieza previa de la base de datos
     console.log('⏳ Limpiando colecciones anteriores...');
     await Booking.deleteMany({});
     await Trip.deleteMany({});
@@ -59,52 +59,36 @@ async function seedData() {
     await Customer.deleteMany({});
     console.log('✓ Colecciones limpiadas.');
 
-    // 1. Generación de 200 Clientes Únicos
-    console.log('⏳ Generando 200 clientes únicos...');
-    const clientesIniciales = [];
-    const nombresUsados = new Set();
-
+    // 1. 200 Clientes
+    console.log('⏳ Generando 200 clientes...');
+    const clientes = [];
     for (let i = 1; i <= 200; i++) {
-      let nombreCompleto = '';
-      do {
-        nombreCompleto = `${elementoAleatorio(nombres)} ${elementoAleatorio(apellidos)}`;
-      } while (nombresUsados.has(nombreCompleto) && nombresUsados.size < 400);
-
-      nombresUsados.add(nombreCompleto);
-
-      const docNum = 1000000000 + i * 37 + enteroAleatorio(1, 9);
-      clientesIniciales.push({
+      const doc = `${1000000000 + i * 17}`;
+      const nombreComp = `${elementoAleatorio(nombres)} ${elementoAleatorio(apellidos)}`;
+      clientes.push({
         tipoDoc: elementoAleatorio(tiposDoc),
-        documento: `${docNum}`,
-        nombre: nombreCompleto,
+        documento: doc,
+        nombre: nombreComp,
         telefono: `310${enteroAleatorio(1000000, 9999999)}`,
-        correo: `cliente.${docNum.toString().slice(-4)}@email.com`,
+        correo: `cliente.${doc.slice(-4)}@email.com`,
         direccion: `Calle ${enteroAleatorio(1, 120)} # ${enteroAleatorio(1, 60)}-${enteroAleatorio(1, 99)}, ${elementoAleatorio(ciudades)}`
       });
     }
-    const customerDocs = await Customer.insertMany(clientesIniciales);
-    console.log(`✓ Clientes generados: ${customerDocs.length}`);
+    const customerDocs = await Customer.insertMany(clientes);
+    console.log(`✓ 200 Clientes registrados: ${customerDocs.length}`);
 
-    // 2. Generación de 70 Vehículos (Buses)
-    console.log('⏳ Generando 70 vehículos...');
-    const vehiculosIniciales = [];
-    const placasUsadas = new Set();
-
+    // 2. 70 Buses
+    console.log('⏳ Generando 70 vehículos/buses...');
+    const buses = [];
     for (let i = 1; i <= 70; i++) {
       const tipo = elementoAleatorio(tiposVehiculo);
       const cap = tipo === 'Bus' ? 40 : tipo === 'Buseta' ? 20 : 12;
-      
-      let placa = '';
-      do {
-        const letras = String.fromCharCode(65 + enteroAleatorio(0, 25)) +
-                       String.fromCharCode(65 + enteroAleatorio(0, 25)) +
-                       String.fromCharCode(65 + enteroAleatorio(0, 25));
-        placa = `${letras}${enteroAleatorio(100, 999)}`;
-      } while (placasUsadas.has(placa));
+      const letras = String.fromCharCode(65 + enteroAleatorio(0, 25)) +
+                     String.fromCharCode(65 + enteroAleatorio(0, 25)) +
+                     String.fromCharCode(65 + enteroAleatorio(0, 25));
+      const placa = `${letras}${enteroAleatorio(100, 999)}`;
 
-      placasUsadas.add(placa);
-
-      vehiculosIniciales.push({
+      buses.push({
         tipo,
         plate: placa,
         numeroSerie: `BUS-${String(i).padStart(3, '0')}`,
@@ -114,62 +98,86 @@ async function seedData() {
         engineSeries: `MOT-${enteroAleatorio(100000, 999999)}`
       });
     }
-    const busDocs = await Bus.insertMany(vehiculosIniciales);
-    console.log(`✓ Vehículos generados: ${busDocs.length}`);
+    const busDocs = await Bus.insertMany(buses);
+    console.log(`✓ 70 Vehículos registrados: ${busDocs.length}`);
 
-    // 3. Generación de 50 Viajes Totalmente Variados
-    console.log('⏳ Generando 50 viajes variados...');
-    const viajesIniciales = [];
-
+    // 3. 50 Viajes
+    console.log('⏳ Generando 50 viajes programados...');
+    const viajes = [];
     for (let i = 1; i <= 50; i++) {
-      const origen = elementoAleatorio(ciudades);
-      let destino = elementoAleatorio(ciudades);
-      while (destino === origen) {
-        destino = elementoAleatorio(ciudades);
-      }
+      const orig = elementoAleatorio(ciudades);
+      let dest = elementoAleatorio(ciudades);
+      while (dest === orig) dest = elementoAleatorio(ciudades);
 
-      const dia = enteroAleatorio(10, 28);
-      const mes = '10'; // Octubre
-      const busAsignado = elementoAleatorio(busDocs);
+      const dia = String(enteroAleatorio(10, 28)).padStart(2, '0');
+      const bus = busDocs[i % busDocs.length];
 
-      viajesIniciales.push({
+      viajes.push({
         codigo: `VIA-${String(i).padStart(3, '0')}`,
-        bus: busAsignado._id,
-        origin: origen,
-        destination: destino,
-        departureDate: `2026-${mes}-${String(dia).padStart(2, '0')}`,
+        bus: bus._id,
+        origin: orig,
+        destination: dest,
+        departureDate: `2026-10-${dia}`,
         departureTime: elementoAleatorio(horarios),
-        price: enteroAleatorio(20, 85) * 1000,
-        status: elementoAleatorio(estadosViaje)
+        price: enteroAleatorio(25, 85) * 1000,
+        status: elementoAleatorio(estadosViaje),
+        occupiedSeats: [],
+        asientosOcupados: [],
+        puestosOcupados: []
       });
     }
-    const tripDocs = await Trip.insertMany(viajesIniciales);
-    console.log(`✓ Viajes generados: ${tripDocs.length}`);
+    const tripDocs = await Trip.insertMany(viajes);
+    console.log(`✓ 50 Viajes registrados: ${tripDocs.length}`);
 
-    // 4. Generación de 100 Ventas / Tiquetes Variados
-    console.log('⏳ Generando 100 tiquetes...');
-    const ventasIniciales = [];
+    // 4. 100 Ventas iniciales (status: 'Pagado')
+    console.log('⏳ Registrando 100 tiquetes/ventas y ocupando asientos...');
+    const ventas = [];
+    const ocupacionPorViaje = {};
 
     for (let i = 1; i <= 100; i++) {
-      const viaje = elementoAleatorio(tripDocs);
-      const cliente = elementoAleatorio(customerDocs);
+      const viaje = tripDocs[i % tripDocs.length];
+      const cliente = customerDocs[i % customerDocs.length];
+      
+      if (!ocupacionPorViaje[viaje._id]) {
+        ocupacionPorViaje[viaje._id] = new Set();
+      }
 
-      ventasIniciales.push({
+      let seat = (i % 18) + 1;
+      while (ocupacionPorViaje[viaje._id].has(seat)) {
+        seat = (seat % 18) + 1;
+      }
+      ocupacionPorViaje[viaje._id].add(seat);
+
+      ventas.push({
         ticketCode: `TKT-${String(i).padStart(3, '0')}`,
         trip: viaje._id,
         customer: cliente._id,
         customerName: cliente.nombre,
         customerDoc: cliente.documento,
-        seatNumber: enteroAleatorio(1, 20),
+        seatNumber: seat,
         totalAmount: viaje.price,
-        saleDate: `2026-10-${String(enteroAleatorio(1, 9)).padStart(2, '0')} ${elementoAleatorio(horarios)}`,
+        saleDate: `2026-10-${String(1 + (i % 8)).padStart(2, '0')} ${elementoAleatorio(horarios)}`,
         status: 'Pagado'
       });
     }
-    await Booking.insertMany(ventasIniciales);
-    console.log(`✓ Tiquetes generados: 100`);
 
-    console.log('🎉 ¡Carga masiva aleatoria completada exitosamente!');
+    await Booking.insertMany(ventas);
+    console.log('✓ 100 Ventas/Tiquetes creados.');
+
+    // Sincronizar puestos ocupados en Trip
+    for (const tripId of Object.keys(ocupacionPorViaje)) {
+      const asientosArray = Array.from(ocupacionPorViaje[tripId]);
+      await Trip.findByIdAndUpdate(tripId, {
+        $set: {
+          occupiedSeats: asientosArray,
+          asientosOcupados: asientosArray,
+          puestosOcupados: asientosArray
+        }
+      });
+    }
+    console.log('✓ Asientos ocupados sincronizados exitosamente en los viajes.');
+
+    console.log('🎉 ¡PROCESO COMPLETADO! 200 Clientes, 70 Buses, 50 Viajes y 100 Ventas listos.');
     process.exit(0);
   } catch (err) {
     console.error('❌ Error al sembrar datos:', err);
