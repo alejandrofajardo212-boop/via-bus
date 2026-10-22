@@ -240,3 +240,168 @@ exports.cancelBooking = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
+// @desc    Venta manual de tramo intermedio (ej: aborda en Bucaramanga, baja en Tunja)
+// @route   POST /api/bookings/manual  o  /api/ventas/manual
+exports.createManualBooking = async (req, res) => {
+  try {
+    const {
+      tripId, viajeId,
+      seatNumber, puestoId,
+      customerId, clienteId,
+      customerName, nombre,
+      customerDoc, documento,
+      precioManual, totalAmount, precio,
+      origenManual, destinoManual,
+      notes, descripcion,
+      saleDate, fechaVenta
+    } = req.body;
+
+    const finalTripId     = viajeId || tripId;
+    const finalSeatNumber = Number(puestoId !== undefined ? puestoId : seatNumber);
+
+    // ── 1. Validar que el viaje exista ──────────────────────────────────────
+    if (!finalTripId) {
+      return res.status(400).json({ success: false, message: 'El tripId / viajeId es obligatorio' });
+    }
+    const trip = await Trip.findById(finalTripId).populate('bus');
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'El viaje seleccionado no existe' });
+    }
+
+    // ── 2. Validar disponibilidad del asiento ───────────────────────────────
+    if (!finalSeatNumber || isNaN(finalSeatNumber)) {
+      return res.status(400).json({ success: false, message: 'El número de asiento es obligatorio' });
+    }
+
+    const occupiedInTrip = [
+      ...(trip.occupiedSeats    || []),
+      ...(trip.asientosOcupados || []),
+      ...(trip.puestosOcupados  || [])
+    ];
+    if (occupiedInTrip.includes(finalSeatNumber)) {
+      return res.status(409).json({
+        success: false,
+        message: `El asiento ${finalSeatNumber} ya está ocupado en este viaje`
+      });
+    }
+
+    // Verificar en Bookings (fuente de verdad)
+    const conflicto = await Booking.findOne({
+      trip: finalTripId,
+      seatNumber: finalSeatNumber,
+      status: { $ne: 'Cancelado' }
+    });
+    if (conflicto) {
+      return res.status(409).json({
+        success: false,
+        message: `El asiento ${finalSeatNumber} ya tiene una reserva activa en este viaje`
+      });
+    }
+
+    // ── 3. Resolver cliente ─────────────────────────────────────────────────
+    let inputName = (customerName || nombre || '').trim();
+    let inputDoc  = (customerDoc  || documento || '').trim();
+    let finalCustomer = null;
+
+    const lookupClientId = clienteId || customerId;
+    if (lookupClientId && typeof lookupClientId === 'string' && lookupClientId.match(/^[0-9a-fA-F]{24}$/)) {
+      finalCustomer = await Customer.findById(lookupClientId);
+    }
+    if (!finalCustomer && inputDoc) {
+      finalCustomer = await Customer.findOne({ documento: inputDoc });
+    }
+    if (finalCustomer) {
+      inputName = finalCustomer.nombre || inputName;
+      inputDoc  = finalCustomer.documento || inputDoc;
+    }
+
+    if (!inputName || !inputDoc) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre y documento del pasajero son obligatorios para la venta manual'
+      });
+    }
+
+    // ── 4. Generar código MNL-XXXXXX único (anti-colisión) ──────────────────
+    let ticketCode = '';
+    let isUnique   = false;
+    let attempts   = 0;
+
+    while (!isUnique && attempts < 20) {
+      attempts++;
+      const randomNum = Math.floor(100000 + Math.random() * 900000);
+      ticketCode = `MNL-${randomNum}`;
+      const existing = await Booking.findOne({ ticketCode });
+      if (!existing) isUnique = true;
+    }
+
+    if (!isUnique) {
+      return res.status(500).json({
+        success: false,
+        message: 'No se pudo generar un código único. Intente nuevamente.'
+      });
+    }
+
+    // ── 5. Fecha y monto ────────────────────────────────────────────────────
+    let finalFechaVenta = fechaVenta || saleDate;
+    if (!finalFechaVenta) {
+      const now = new Date();
+      finalFechaVenta = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    }
+
+    const finalAmount = Number(
+      precioManual !== undefined ? precioManual :
+      precio       !== undefined ? precio       :
+      totalAmount  !== undefined ? totalAmount  :
+      trip.price
+    );
+
+    const manualOrigen  = (origenManual  || trip.origin     || '').trim();
+    const manualDestino = (destinoManual || trip.destination || '').trim();
+    const finalNotes    = (descripcion   || notes            || '').trim();
+
+    // ── 6. Crear la venta manual en BD ──────────────────────────────────────
+    const booking = await Booking.create({
+      ticketCode,
+      trip:              finalTripId,
+      customer:          finalCustomer ? finalCustomer._id : null,
+      seatNumber:        finalSeatNumber,
+      customerName:      inputName,
+      customerDoc:       inputDoc,
+      totalAmount:       finalAmount,
+      origin:            manualOrigen,
+      destination:       manualDestino,
+      notes:             finalNotes,
+      saleDate:          finalFechaVenta,
+      status:            'Pagado',
+      isManual:          true,
+      manualOrigin:      manualOrigen,
+      manualDestination: manualDestino
+    });
+
+    // ── 7. Bloquear asiento en el Trip ($addToSet evita duplicados) ─────────
+    await Trip.findByIdAndUpdate(finalTripId, {
+      $addToSet: {
+        occupiedSeats:    finalSeatNumber,
+        asientosOcupados: finalSeatNumber,
+        puestosOcupados:  finalSeatNumber
+      }
+    });
+
+    const populatedBooking = await Booking.findById(booking._id)
+      .populate({ path: 'trip', populate: { path: 'bus' } })
+      .populate('customer');
+
+    return res.status(201).json({
+      success:  true,
+      message:  `¡Venta manual emitida! Código: ${ticketCode}`,
+      isManual: true,
+      data:     populatedBooking
+    });
+
+  } catch (error) {
+    console.error('Error en createManualBooking:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};

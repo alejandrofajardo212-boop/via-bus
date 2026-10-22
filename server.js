@@ -32,6 +32,10 @@ app.use('/api/ventas', require('./src/routes/bookingRoutes'));
 app.use('/api/reservas', require('./src/routes/bookingRoutes'));
 app.use('/api/bookings', require('./src/routes/bookingRoutes'));
 
+// Rutas de Autenticación y Gestión de Usuarios
+app.use('/api/auth', require('./src/routes/authRoutes'));
+app.use('/api/usuarios', require('./src/routes/authRoutes'));
+
 // Ruta base de prueba
 app.get('/', (req, res) => {
   res.json({

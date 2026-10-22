@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   createBooking,
+  createManualBooking,
   getBookings,
   getTicketByCode,
   cancelBooking
@@ -10,6 +11,9 @@ const {
 router.route('/')
   .get(getBookings)
   .post(createBooking);
+
+// Venta manual de tramo intermedio (MNL-XXXXXX)
+router.post('/manual', createManualBooking);
 
 router.get('/ticket/:code', getTicketByCode);
 router.get('/:code', getTicketByCode);

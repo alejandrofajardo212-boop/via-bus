@@ -1,186 +1,268 @@
+/**
+ * ViaBus — Script de Carga Masiva (seed.js)
+ * ─────────────────────────────────────────
+ * Ejecutar: node src/config/seed.js
+ *
+ * Genera:
+ *   - 3  usuarios predefinidos (SuperAdmin, Administrador, Oficina)
+ *   - 200 clientes
+ *   - 70  buses
+ *   - 50  viajes
+ *   - 100 tiquetes/ventas (status: 'Pagado') + asientos ocupados en Trip
+ */
+
 const mongoose = require('mongoose');
-const dotenv = require('dotenv');
+const bcrypt   = require('bcryptjs');
+const dotenv   = require('dotenv');
 
 dotenv.config();
 
+// ─── Importar conexión ANTES de usarla ────────────────────────────────────────
 const connectDB = require('./db');
 
-const Bus = require('../models/bus');
+// ─── Modelos ──────────────────────────────────────────────────────────────────
+const User     = require('../models/user');
+const Bus      = require('../models/bus');
 const Customer = require('../models/customer');
-const Trip = require('../models/trip');
-const Booking = require('../models/booking');
+const Trip     = require('../models/trip');
+const Booking  = require('../models/booking');
 
-function elementoAleatorio(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
-function enteroAleatorio(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
+// ─── Datos base ───────────────────────────────────────────────────────────────
 const ciudades = [
-  'Bogotá', 'Medellín', 'Cali', 'Bucaramanga', 'San Gil', 'Charalá', 
-  'Socorro', 'Cartagena', 'Tunja', 'Pereira', 'Manizales', 'Armenia', 
-  'Santa Marta', 'Cúcuta', 'Ibagué', 'Villavicencio'
+  'Bogotá', 'Medellín', 'Cali', 'Bucaramanga', 'San Gil', 'Charalá',
+  'Socorro', 'Cartagena', 'Tunja', 'Pereira', 'Manizales', 'Armenia',
+  'Santa Marta', 'Cúcuta', 'Ibagué', 'Villavicencio', 'Pasto', 'Neiva',
+  'Montería', 'Barranquilla'
 ];
 
 const nombres = [
-  'Camila', 'Juan', 'Valentina', 'David', 'Sandra', 'Carlos', 'Andrea', 'Mateo', 
-  'Daniela', 'Felipe', 'Santiago', 'Sofia', 'Alejandro', 'Mariana', 'Sebastian', 
-  'Natalia', 'Nicolas', 'Paula', 'Diego', 'Laura', 'Gabriel', 'Lucia', 'Julian', 'Isabella'
+  'Camila', 'Juan', 'Valentina', 'David', 'Sandra', 'Carlos', 'Andrea', 'Mateo',
+  'Daniela', 'Felipe', 'Santiago', 'Sofia', 'Alejandro', 'Mariana', 'Sebastian',
+  'Natalia', 'Nicolas', 'Paula', 'Diego', 'Laura', 'Gabriel', 'Lucia', 'Julian',
+  'Isabella', 'Tomás', 'Valeria', 'Andrés', 'Catalina', 'Ricardo', 'Melissa'
 ];
 
 const apellidos = [
-  'Restrepo', 'Salazar', 'Morales', 'Smith', 'Castro', 'López', 'Gómez', 'Martínez', 
-  'Rojas', 'Rodríguez', 'Pérez', 'García', 'Vargas', 'Sánchez', 'Torres', 'Díaz', 
-  'Suárez', 'Mendoza', 'Cortés', 'Ramírez'
+  'Restrepo', 'Salazar', 'Morales', 'Smith', 'Castro', 'López', 'Gómez', 'Martínez',
+  'Rojas', 'Rodríguez', 'Pérez', 'García', 'Vargas', 'Sánchez', 'Torres', 'Díaz',
+  'Suárez', 'Mendoza', 'Cortés', 'Ramírez', 'Herrera', 'Ríos', 'Cardona', 'Ospina'
 ];
 
 const conductores = [
-  'Carlos López', 'Andrés Gómez', 'Jorge Martínez', 'Hernán Silva', 'Wilson Pérez', 
-  'Javier Rojas', 'Misterly Torres', 'Gonzalo Vargas', 'Orlando Ramírez'
+  'Carlos López', 'Andrés Gómez', 'Jorge Martínez', 'Hernán Silva', 'Wilson Pérez',
+  'Javier Rojas', 'Misterly Torres', 'Gonzalo Vargas', 'Orlando Ramírez',
+  'Efraín Suárez', 'Fredy Cortés', 'Mauricio Herrera', 'Alirio Ríos'
 ];
 
-const horarios = ['05:00', '06:30', '08:00', '09:30', '11:00', '13:00', '14:30', '16:00', '17:30', '19:00', '20:30', '22:00'];
-const tiposDoc = ['CC', 'TI', 'CE'];
-const tiposVehiculo = ['Bus', 'Buseta', 'Microbús'];
+const horarios    = ['05:00','06:30','08:00','09:30','11:00','13:00','14:30','16:00','17:30','19:00','20:30','22:00'];
+const tiposDoc    = ['CC', 'TI', 'CE'];
+const tiposVeh    = ['Bus', 'Buseta', 'Microbús'];
 const estadosViaje = ['Disponible', 'Programado', 'Vendido'];
 
+// ─────────────────────────────────────────────────────────────────────────────
 async function seedData() {
   try {
     console.log('🔄 Conectando a la base de datos...');
     await connectDB();
-    console.log('--- Iniciando Carga Masiva Completa ViaBus ---');
+    console.log('✅ Conexión establecida.\n');
+    console.log('━━━ INICIANDO CARGA MASIVA ViaBus ━━━\n');
 
-    console.log('⏳ Limpiando colecciones anteriores...');
+    // ── 0. Limpiar colecciones ─────────────────────────────────────────────
+    console.log('🗑  Limpiando colecciones...');
     await Booking.deleteMany({});
     await Trip.deleteMany({});
     await Bus.deleteMany({});
     await Customer.deleteMany({});
-    console.log('✓ Colecciones limpiadas.');
+    await User.deleteMany({});
+    console.log('✓  Todas las colecciones limpiadas.\n');
 
-    // 1. 200 Clientes
-    console.log('⏳ Generando 200 clientes...');
+    // ── 1. Usuarios predeterminados (contraseñas hasheadas con bcryptjs) ───
+    console.log('👤 Insertando 3 usuarios predeterminados...');
+    const SALT_ROUNDS = 12;
+
+    const usuariosBase = [
+      {
+        nombre:   'Super Administrador Global',
+        email:    'superadmin@viabus.com',
+        username: 'superadmin',
+        password: await bcrypt.hash('SuperAdmin2026*', SALT_ROUNDS),
+        rol:      'SuperAdmin',
+        activo:   true
+      },
+      {
+        nombre:   'Administrador de Flota',
+        email:    'admin@viabus.com',
+        username: 'admin',
+        password: await bcrypt.hash('Admin2026*', SALT_ROUNDS),
+        rol:      'Administrador',
+        activo:   true
+      },
+      {
+        nombre:   'Operador de Taquilla',
+        email:    'oficina@viabus.com',
+        username: 'oficina',
+        password: await bcrypt.hash('Oficina2026*', SALT_ROUNDS),
+        rol:      'Oficina',
+        activo:   true
+      }
+    ];
+
+    // Insertar directamente en la colección para omitir el pre('save') del modelo
+    // (ya hicimos el hash manualmente arriba) → usar insertMany con { validateBeforeSave: false }
+    // NOTA: Como el hash ya está hecho, usamos Model.collection.insertMany para saltarnos
+    // el middleware pre-save (que volvería a hashear la contraseña ya hasheada).
+    await User.collection.insertMany(usuariosBase);
+    console.log('✓  3 Usuarios predeterminados insertados.\n');
+
+    // ── 2. 200 Clientes ────────────────────────────────────────────────────
+    console.log('👥 Generando 200 clientes...');
     const clientes = [];
     for (let i = 1; i <= 200; i++) {
       const doc = `${1000000000 + i * 17}`;
-      const nombreComp = `${elementoAleatorio(nombres)} ${elementoAleatorio(apellidos)}`;
       clientes.push({
-        tipoDoc: elementoAleatorio(tiposDoc),
+        tipoDoc:   pick(tiposDoc),
         documento: doc,
-        nombre: nombreComp,
-        telefono: `310${enteroAleatorio(1000000, 9999999)}`,
-        correo: `cliente.${doc.slice(-4)}@email.com`,
-        direccion: `Calle ${enteroAleatorio(1, 120)} # ${enteroAleatorio(1, 60)}-${enteroAleatorio(1, 99)}, ${elementoAleatorio(ciudades)}`
+        nombre:    `${pick(nombres)} ${pick(apellidos)}`,
+        telefono:  `310${randInt(1000000, 9999999)}`,
+        correo:    `cliente${i}.${doc.slice(-4)}@email.com`,
+        direccion: `Calle ${randInt(1, 120)} # ${randInt(1, 60)}-${randInt(1, 99)}, ${pick(ciudades)}`
       });
     }
     const customerDocs = await Customer.insertMany(clientes);
-    console.log(`✓ 200 Clientes registrados: ${customerDocs.length}`);
+    console.log(`✓  ${customerDocs.length} Clientes insertados.\n`);
 
-    // 2. 70 Buses
-    console.log('⏳ Generando 70 vehículos/buses...');
+    // ── 3. 70 Buses ────────────────────────────────────────────────────────
+    console.log('🚌 Generando 70 buses...');
+    const placasUsadas = new Set();
     const buses = [];
+
     for (let i = 1; i <= 70; i++) {
-      const tipo = elementoAleatorio(tiposVehiculo);
-      const cap = tipo === 'Bus' ? 40 : tipo === 'Buseta' ? 20 : 12;
-      const letras = String.fromCharCode(65 + enteroAleatorio(0, 25)) +
-                     String.fromCharCode(65 + enteroAleatorio(0, 25)) +
-                     String.fromCharCode(65 + enteroAleatorio(0, 25));
-      const placa = `${letras}${enteroAleatorio(100, 999)}`;
+      const tipo = pick(tiposVeh);
+      const cap  = tipo === 'Bus' ? 40 : tipo === 'Buseta' ? 20 : 12;
+
+      let placa;
+      do {
+        const letras = String.fromCharCode(65 + randInt(0, 25)) +
+                       String.fromCharCode(65 + randInt(0, 25)) +
+                       String.fromCharCode(65 + randInt(0, 25));
+        placa = `${letras}${randInt(100, 999)}`;
+      } while (placasUsadas.has(placa));
+      placasUsadas.add(placa);
 
       buses.push({
         tipo,
-        plate: placa,
-        numeroSerie: `BUS-${String(i).padStart(3, '0')}`,
-        capacity: cap,
-        driverName: elementoAleatorio(conductores),
-        chassisSeries: `CHS-${enteroAleatorio(100000, 999999)}`,
-        engineSeries: `MOT-${enteroAleatorio(100000, 999999)}`
+        plate:        placa,
+        numeroSerie:  `BUS-${String(i).padStart(3, '0')}`,
+        capacity:     cap,
+        driverName:   pick(conductores),
+        chassisSeries:`CHS-${randInt(100000, 999999)}`,
+        engineSeries: `MOT-${randInt(100000, 999999)}`
       });
     }
     const busDocs = await Bus.insertMany(buses);
-    console.log(`✓ 70 Vehículos registrados: ${busDocs.length}`);
+    console.log(`✓  ${busDocs.length} Buses insertados.\n`);
 
-    // 3. 50 Viajes
-    console.log('⏳ Generando 50 viajes programados...');
+    // ── 4. 50 Viajes ───────────────────────────────────────────────────────
+    console.log('🗺  Generando 50 viajes...');
     const viajes = [];
     for (let i = 1; i <= 50; i++) {
-      const orig = elementoAleatorio(ciudades);
-      let dest = elementoAleatorio(ciudades);
-      while (dest === orig) dest = elementoAleatorio(ciudades);
+      const orig = pick(ciudades);
+      let dest;
+      do { dest = pick(ciudades); } while (dest === orig);
 
-      const dia = String(enteroAleatorio(10, 28)).padStart(2, '0');
+      const dia = String(randInt(10, 28)).padStart(2, '0');
       const bus = busDocs[i % busDocs.length];
 
       viajes.push({
-        codigo: `VIA-${String(i).padStart(3, '0')}`,
-        bus: bus._id,
-        origin: orig,
-        destination: dest,
+        codigo:        `VIA-${String(i).padStart(3, '0')}`,
+        bus:           bus._id,
+        origin:        orig,
+        destination:   dest,
         departureDate: `2026-10-${dia}`,
-        departureTime: elementoAleatorio(horarios),
-        price: enteroAleatorio(25, 85) * 1000,
-        status: elementoAleatorio(estadosViaje),
+        departureTime: pick(horarios),
+        price:         randInt(25, 85) * 1000,
+        status:        pick(estadosViaje),
         occupiedSeats: [],
         asientosOcupados: [],
-        puestosOcupados: []
+        puestosOcupados:  []
       });
     }
     const tripDocs = await Trip.insertMany(viajes);
-    console.log(`✓ 50 Viajes registrados: ${tripDocs.length}`);
+    console.log(`✓  ${tripDocs.length} Viajes insertados.\n`);
 
-    // 4. 100 Ventas iniciales (status: 'Pagado')
-    console.log('⏳ Registrando 100 tiquetes/ventas y ocupando asientos...');
+    // ── 5. 100 Tiquetes / Ventas (status: 'Pagado') ─────────────────────────
+    console.log('🎫 Generando 100 tiquetes con asientos ocupados...');
     const ventas = [];
-    const ocupacionPorViaje = {};
+    const ocupacionPorViaje = {};   // { tripId → Set<seatNumber> }
 
     for (let i = 1; i <= 100; i++) {
-      const viaje = tripDocs[i % tripDocs.length];
+      const viaje   = tripDocs[i % tripDocs.length];
       const cliente = customerDocs[i % customerDocs.length];
-      
-      if (!ocupacionPorViaje[viaje._id]) {
-        ocupacionPorViaje[viaje._id] = new Set();
+
+      const tripKey = viaje._id.toString();
+      if (!ocupacionPorViaje[tripKey]) {
+        ocupacionPorViaje[tripKey] = new Set();
       }
 
+      // Buscar asiento libre dentro del rango 1-18 (sin colisión en el mismo viaje)
       let seat = (i % 18) + 1;
-      while (ocupacionPorViaje[viaje._id].has(seat)) {
+      let guard = 0;
+      while (ocupacionPorViaje[tripKey].has(seat) && guard < 40) {
         seat = (seat % 18) + 1;
+        guard++;
       }
-      ocupacionPorViaje[viaje._id].add(seat);
+      // Si todos los asientos del rango están ocupados, usar un número mayor
+      if (ocupacionPorViaje[tripKey].has(seat)) {
+        seat = ocupacionPorViaje[tripKey].size + 19;
+      }
+      ocupacionPorViaje[tripKey].add(seat);
 
       ventas.push({
-        ticketCode: `TKT-${String(i).padStart(3, '0')}`,
-        trip: viaje._id,
-        customer: cliente._id,
+        ticketCode:   `TKT-${String(i).padStart(3, '0')}`,
+        trip:         viaje._id,
+        customer:     cliente._id,
         customerName: cliente.nombre,
-        customerDoc: cliente.documento,
-        seatNumber: seat,
-        totalAmount: viaje.price,
-        saleDate: `2026-10-${String(1 + (i % 8)).padStart(2, '0')} ${elementoAleatorio(horarios)}`,
-        status: 'Pagado'
+        customerDoc:  cliente.documento,
+        seatNumber:   seat,
+        totalAmount:  viaje.price,
+        origin:       viaje.origin,
+        destination:  viaje.destination,
+        saleDate:     `2026-10-${String(1 + (i % 8)).padStart(2, '0')} ${pick(horarios)}`,
+        status:       'Pagado'   // ← siempre valor del enum permitido
       });
     }
 
     await Booking.insertMany(ventas);
-    console.log('✓ 100 Ventas/Tiquetes creados.');
+    console.log(`✓  ${ventas.length} Tiquetes insertados.\n`);
 
-    // Sincronizar puestos ocupados en Trip
-    for (const tripId of Object.keys(ocupacionPorViaje)) {
-      const asientosArray = Array.from(ocupacionPorViaje[tripId]);
+    // ── 6. Sincronizar occupiedSeats en cada Trip ──────────────────────────
+    console.log('🔄 Sincronizando asientos ocupados en los viajes...');
+    for (const [tripId, asientosSet] of Object.entries(ocupacionPorViaje)) {
+      const asientosArray = Array.from(asientosSet);
       await Trip.findByIdAndUpdate(tripId, {
         $set: {
-          occupiedSeats: asientosArray,
+          occupiedSeats:    asientosArray,
           asientosOcupados: asientosArray,
-          puestosOcupados: asientosArray
+          puestosOcupados:  asientosArray
         }
       });
     }
-    console.log('✓ Asientos ocupados sincronizados exitosamente en los viajes.');
+    console.log('✓  Asientos ocupados sincronizados en todos los viajes.\n');
 
-    console.log('🎉 ¡PROCESO COMPLETADO! 200 Clientes, 70 Buses, 50 Viajes y 100 Ventas listos.');
+    console.log('🎉 ¡CARGA MASIVA COMPLETADA EXITOSAMENTE!');
+    console.log('   • 3   Usuarios  (SuperAdmin / Administrador / Oficina)');
+    console.log(`   • ${customerDocs.length}  Clientes`);
+    console.log(`   • ${busDocs.length}   Buses`);
+    console.log(`   • ${tripDocs.length}   Viajes`);
+    console.log(`   • ${ventas.length}  Tiquetes (status: Pagado)\n`);
+
     process.exit(0);
   } catch (err) {
-    console.error('❌ Error al sembrar datos:', err);
+    console.error('\n❌ Error durante la carga masiva:', err);
     process.exit(1);
   }
 }

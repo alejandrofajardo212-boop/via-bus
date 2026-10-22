@@ -52,9 +52,24 @@ const bookingSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // ─── Campos de Venta Manual ─────────────────────────────────────────────────
+  isManual: {
+    type: Boolean,
+    default: false
+  },
+  manualOrigin: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  manualDestination: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   status: {
     type: String,
-    enum: ['Pagado', 'Pendiente', 'Cancelado', 'CONFIRMED', 'PENDING', 'CANCELLED'],
+    enum: ['Pagado', 'Pendiente', 'Cancelado'],
     default: 'Pagado'
   }
 }, {
